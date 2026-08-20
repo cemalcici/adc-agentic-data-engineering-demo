@@ -1,0 +1,12 @@
+# Both the orchestrator's and the agent's images build from the repository root,
+# because they share one dbt pin that lives there. Everything neither image
+# needs is kept out of the build context.
+.git
+.ruff_cache
+**/__pycache__
+.claude
+openspec
+adr
+dbt/target
+dbt/logs
+.env

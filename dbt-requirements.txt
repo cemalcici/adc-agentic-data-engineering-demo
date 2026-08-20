@@ -1,0 +1,14 @@
+# The one place either image gets its dbt version from.
+#
+# dbt is installed twice: the orchestrator runs the pipeline's transformation,
+# and the agent builds a candidate correction to prove it works before offering
+# it. Two installations that drifted apart would make the agent's validation
+# predict a build the pipeline does not run — so neither image carries its own
+# copy of these versions, and changing dbt here changes it for both.
+#
+# In both images it lives in an isolated virtualenv and is invoked by absolute
+# path, for the reasons in ADR-0009.
+# See adr/0022-prove-a-fix-by-building-it-on-a-copy.md
+# See adr/0009-install-dbt-in-an-isolated-virtualenv-inside-the-orchestrator-image.md
+dbt-core==1.12.2
+dbt-postgres==1.11.0

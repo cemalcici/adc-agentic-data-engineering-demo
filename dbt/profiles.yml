@@ -1,0 +1,19 @@
+# Connection settings for the transformation project.
+#
+# Every credential is resolved from the environment. Nothing under /dbt may
+# contain a credential literal: this directory is the agent's writable target
+# from CH6 onward, and a secret's safety should not depend on a whitelist
+# behaving correctly.
+
+adc_warehouse:
+  target: local
+  outputs:
+    local:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST') }}"
+      port: 5432
+      user: "{{ env_var('POSTGRES_USER') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD') }}"
+      dbname: "{{ env_var('POSTGRES_WAREHOUSE_DB') }}"
+      schema: public
+      threads: 4

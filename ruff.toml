@@ -1,0 +1,25 @@
+# Lint settings for the PoC's Python: the agent service, the Streamlit app, the
+# seed and arrivals components, and the DAG code.
+#
+# Exists so "ruff-clean" means something reproducible rather than whatever
+# ruff's defaults happen to be. code-standards.md is the source of truth for
+# what matters here — type hints on signatures, no unused imports, no bare
+# except.
+
+line-length = 100
+
+[lint.isort]
+# These live beside the code that imports them: DAG helpers are resolved from
+# Airflow's dags folder, and the seed modules from their own image. Without
+# this, ruff sorts them as third-party and the grouping misleads.
+known-first-party = [
+    "elt_extract",
+    "customer_rows",
+    "db",
+    "config",
+    "diagnosis",
+    "evidence",
+    "graph",
+    "incidents",
+    "orchestrator",
+]

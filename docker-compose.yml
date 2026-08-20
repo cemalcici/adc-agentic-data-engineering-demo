@@ -1,0 +1,356 @@
+# Self-Healing Data Pipeline PoC — local stack.
+#
+# This file declares the COMPLETE service topology, including services whose
+# code arrives in later changes. Those are held behind compose profiles so they
+# are declared without starting. Agreeing the topology once, here, is what makes
+# a later change filling in its own service block a deliberate act rather than
+# an incidental edit to a protected file.
+# See adr/0002-declare-full-service-topology-before-implementing-it.md
+#
+# Live now:      postgres, seeder, source-activity, airflow-init,
+#                airflow-apiserver, airflow-scheduler, airflow-dag-processor,
+#                phoenix, agent, streamlit
+# Behind a profile, run on demand: drift (CH4)
+#
+# Start:   docker compose up -d
+# Verify:  ./verify-stack.sh
+# Reset:   docker compose down -v
+
+x-airflow-common: &airflow-common
+  # Built rather than pulled: the image carries dbt in an isolated virtualenv.
+  # ADR-0002 agreed the topology once precisely so that a later change filling
+  # in its own service definition counts as deliberate.
+  # See adr/0009-install-dbt-in-an-isolated-virtualenv-inside-the-orchestrator-image.md
+  #
+  # Built from the repository root rather than ./airflow: dbt's versions live in
+  # one shared file there that the agent's image installs from too, so that a
+  # candidate is validated with the same build the pipeline runs.
+  # See adr/0022-prove-a-fix-by-building-it-on-a-copy.md
+  build:
+    context: .
+    dockerfile: airflow/Dockerfile
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    # dbt reads its project and profile from the bind-mounted transformation
+    # directory (ADR-0003). Credentials come from the environment, never from a
+    # file inside /dbt.
+    DBT_PROFILES_DIR: /dbt
+    DBT_PROJECT_DIR: /dbt
+    POSTGRES_HOST: postgres
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    POSTGRES_WAREHOUSE_DB: warehouse_db
+    POSTGRES_SOURCE_DB: source_db
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+      postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/airflow
+    # The JWT secret signs API tokens and must be identical across every
+    # component that issues or validates them.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    # Simple auth manager with one admin. Passwords normally get generated on
+    # first start; airflow-init writes this file explicitly instead, so a cold
+    # start yields a credential we already know and no setup step is needed.
+    # Two users, not one. The agent uses the admin because it must be able to
+    # start a run; the console gets a viewer because it must not.
+    # See adr/0027-bound-the-consoles-authority-by-grant.md
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS: "${AIRFLOW_ADMIN_USERNAME}:admin,${AIRFLOW_VIEWER_USERNAME}:viewer"
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/auth/passwords.json
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - airflow-auth:/opt/airflow/auth
+    - airflow-logs:/opt/airflow/logs
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    postgres:
+      condition: service_healthy
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — one instance, three separate databases.
+  # See adr/0001-separate-databases-for-source-warehouse-and-orchestrator.md
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      # Read by 04-dashboard-role.sh, which creates the console's role. Passed
+      # as variables rather than written into the script, so nothing under
+      # postgres/init contains a credential literal.
+      DASHBOARD_DB_USER: ${DASHBOARD_DB_USER}
+      DASHBOARD_DB_PASSWORD: ${DASHBOARD_DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      # pg_isready reports readiness to accept connections, which is what
+      # dependents actually need — a running container is not the same thing.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Seeder — generates the upstream dataset deterministically, then exits.
+  # See adr/0005-generate-seed-data-deterministically-from-a-one-shot-service.md
+  # ---------------------------------------------------------------------------
+  seeder:
+    build: ./postgres/seed
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_SOURCE_DB: source_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SEED_ROW_COUNT: ${SEED_ROW_COUNT:-25000}
+      SEED_RANDOM_SEED: ${SEED_RANDOM_SEED:-61}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # The simulated upstream system, still operating. Appends new customer records
+  # on an interval so the pipeline has changing work to do. Writes only to
+  # source_db — never the warehouse, never the transformation project.
+  # See adr/0012-let-the-simulated-upstream-keep-operating.md
+  # ---------------------------------------------------------------------------
+  source-activity:
+    build: ./postgres/seed
+    command: ["python", "-u", "source_activity.py"]
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_SOURCE_DB: source_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      SEED_RANDOM_SEED: ${SEED_RANDOM_SEED:-61}
+      ARRIVAL_BATCH_SIZE: ${ARRIVAL_BATCH_SIZE:-25}
+      ARRIVAL_INTERVAL_SECONDS: ${ARRIVAL_INTERVAL_SECONDS:-60}
+    depends_on:
+      seeder:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Airflow 3 on LocalExecutor. No broker, no workers.
+  # See adr/0004-run-the-orchestrator-on-localexecutor-with-shared-metadata-storage.md
+  # ---------------------------------------------------------------------------
+  airflow-init:
+    <<: *airflow-common
+    # Runs as root so it can take ownership of the named volumes before the
+    # unprivileged airflow user needs to write to them. HOME must point at the
+    # airflow user's home or the CLI is not importable as root — the package
+    # lives in /home/airflow/.local.
+    user: "0:0"
+    environment:
+      <<: *airflow-common-env
+      HOME: /home/airflow
+      # Referenced as shell variables below, never interpolated into the
+      # command string, so the password does not end up in `docker inspect`.
+      AIRFLOW_ADMIN_USERNAME: ${AIRFLOW_ADMIN_USERNAME}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      AIRFLOW_VIEWER_USERNAME: ${AIRFLOW_VIEWER_USERNAME}
+      AIRFLOW_VIEWER_PASSWORD: ${AIRFLOW_VIEWER_PASSWORD}
+      AIRFLOW_RUN_UID: ${AIRFLOW_UID:-50000}
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        set -euo pipefail
+        mkdir -p /opt/airflow/auth /opt/airflow/logs
+        airflow db migrate
+        # Provision the admin credential non-interactively. The simple auth
+        # manager reads passwords from this file; writing it ourselves means a
+        # cold start needs no setup screen and no log-scraping for a generated
+        # password.
+        python -c 'import json, os, pathlib; pathlib.Path("/opt/airflow/auth/passwords.json").write_text(json.dumps({os.environ["AIRFLOW_ADMIN_USERNAME"]: os.environ["AIRFLOW_ADMIN_PASSWORD"], os.environ["AIRFLOW_VIEWER_USERNAME"]: os.environ["AIRFLOW_VIEWER_PASSWORD"]}))'
+        chmod 600 /opt/airflow/auth/passwords.json
+        chown -R "$${AIRFLOW_RUN_UID}:0" /opt/airflow/auth /opt/airflow/logs
+        echo "airflow-init complete"
+    restart: "no"
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "${AIRFLOW_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - airflow-auth:/opt/airflow/auth
+      - airflow-logs:/opt/airflow/logs
+      # The transformation project. Read-write because dbt writes its build
+      # output inside the project; the write-scope invariant is enforced by
+      # withholding this mount from the drift service, not by making this one
+      # read-only. See adr/0003-...
+      - ./dbt:/dbt
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      # Nothing that reads the source dataset may start before seeding is done.
+      # No DAG exists yet, but the guarantee belongs in the topology rather than
+      # in a future change's discipline.
+      seeder:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------------------
+  # Phoenix — agent trace collection. Keeps its own storage on a named volume,
+  # deliberately sharing nothing with the PostgreSQL instance above, so that
+  # observability cannot be degraded by the pipeline it observes.
+  # See adr/0006-keep-observability-storage-independent-of-pipeline-storage.md
+  # ---------------------------------------------------------------------------
+  phoenix:
+    # Pinned rather than :latest — the demo is rehearsed and then performed, and
+    # an image that changes underneath between the two is not reproducible.
+    image: arizephoenix/phoenix:version-20.2.1
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+    volumes:
+      - phoenix-data:/mnt/data
+    ports:
+      - "${PHOENIX_PORT:-6006}:6006"
+      - "${PHOENIX_OTLP_PORT:-4317}:4317"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6006/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Declared, not started. Each is held behind a profile so `docker compose up`
+  # ignores it entirely — no placeholder container, no ambiguous health state.
+  # The change that implements one fills in its build context and drops the
+  # profile.
+  # ---------------------------------------------------------------------------
+
+  # CH6. Writes to /dbt only after a recorded approval, and reaches Airflow
+  # through the REST API using a token from /auth/token.
+  agent:
+    # Repository root for the same reason the orchestrator uses it: the shared
+    # dbt pin lives there, and both images install from it.
+    build:
+      context: .
+      dockerfile: agent/Dockerfile
+    restart: unless-stopped
+    environment:
+      # Deliberately does NOT inherit the airflow environment: the agent talks
+      # to Airflow over its REST API, so it needs a URL and credentials, not a
+      # metadata database connection string.
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      AIRFLOW_API_URL: http://airflow-apiserver:8080
+      AIRFLOW_ADMIN_USERNAME: ${AIRFLOW_ADMIN_USERNAME}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD}
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006
+      PHOENIX_UI_URL: http://localhost:${PHOENIX_PORT:-6006}
+      POSTGRES_SOURCE_DB: source_db
+      POSTGRES_WAREHOUSE_DB: warehouse_db
+      AIRFLOW_DAG_ID: customer_elt
+      AGENT_POLL_INTERVAL_SECONDS: ${AGENT_POLL_INTERVAL_SECONDS:-20}
+      # An OpenAI-COMPATIBLE endpoint; the prefix names the protocol, not the
+      # supplier. See adr/0018-depend-on-an-openai-compatible-endpoint-not-a-vendor.md
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_MODEL: ${OPENAI_MODEL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-apiserver:
+        condition: service_healthy
+    volumes:
+      # Read-write per adr/0003, but nothing in this change writes through it.
+      # Diagnosing and proposing both only read; a candidate is built on a copy
+      # in the agent's own scratch space, never here. CH8 is what writes here.
+      - ./dbt:/dbt
+
+  # Presentation only — reads incidents and the orchestrator, writes the
+  # operator's decision and nothing else.
+  #
+  # Both its credentials are narrower than the agent's, and deliberately so: the
+  # database role may update one column of one table, and the orchestrator user
+  # may read but not start a run. "The interface writes only the decision" is a
+  # claim the demo makes out loud, so it is a privilege rather than a habit.
+  # See adr/0027-bound-the-consoles-authority-by-grant.md
+  streamlit:
+    build: ./streamlit_app
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_WAREHOUSE_DB: warehouse_db
+      # NOT ${POSTGRES_USER}: that role owns the schema and could rewrite a
+      # diagnosis. The console gets its own.
+      POSTGRES_USER: ${DASHBOARD_DB_USER}
+      POSTGRES_PASSWORD: ${DASHBOARD_DB_PASSWORD}
+      # Health comes from the orchestrator, never from the warehouse's
+      # contents — a failed run leaves the previous output in place, so data
+      # would report green throughout an incident.
+      # See adr/0026-read-pipeline-health-from-the-run-not-the-data.md
+      AIRFLOW_API_URL: http://airflow-apiserver:8080
+      AIRFLOW_USERNAME: ${AIRFLOW_VIEWER_USERNAME}
+      AIRFLOW_PASSWORD: ${AIRFLOW_VIEWER_PASSWORD}
+      AIRFLOW_DAG_ID: customer_elt
+      # No PHOENIX_UI_URL: the agent already stores a complete trace address on
+      # the incident, so the console links to what it was given rather than
+      # rebuilding an address of its own.
+      DASHBOARD_REFRESH_SECONDS: ${DASHBOARD_REFRESH_SECONDS:-5}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-apiserver:
+        condition: service_healthy
+    # No /dbt mount. The console never reads or writes the transformation
+    # project; it shows a difference derived from what the incident stores.
+    # See adr/0003-enforce-the-transformation-write-scope-by-withholding-the-mount.md
+    ports:
+      - "${DASHBOARD_PORT:-8501}:8501"
+
+  # CH4. Mutates source_db and nothing else. Deliberately has NO /dbt mount:
+  # this is where the "only the agent may modify the transformation project"
+  # invariant is actually enforced. Do not add one.
+  # See adr/0003-enforce-the-transformation-write-scope-by-withholding-the-mount.md
+  drift:
+    profiles: ["drift"]
+    build: ./scripts
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_SOURCE_DB: source_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+volumes:
+  postgres-data:
+  airflow-auth:
+  airflow-logs:
+  # Separate from postgres-data on purpose — see ADR-0006.
+  phoenix-data:

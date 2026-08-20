@@ -1,0 +1,17 @@
+# Dark only, per ui-context.md. The tokens here and the ones injected as CSS in
+# theme.py come from the same table in that document; nothing defines a colour
+# of its own.
+
+[theme]
+base = "dark"
+backgroundColor = "#0B0F14"
+secondaryBackgroundColor = "#151B23"
+textColor = "#E6EDF3"
+primaryColor = "#4C9AFF"
+font = "sans serif"
+
+[server]
+runOnSave = false
+
+[client]
+toolbarMode = "minimal"

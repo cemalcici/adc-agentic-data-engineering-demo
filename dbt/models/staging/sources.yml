@@ -1,0 +1,38 @@
+# The landing table contract.
+#
+# This declares what the transformation depends on; it does not create or
+# populate the table. CH3's extract task fills it by copying rows out of
+# source_db — PostgreSQL cannot query across databases, so a physical copy is
+# the only path from the upstream system into the warehouse.
+#
+# This declaration is authoritative. The extract must be written against it,
+# not against whatever the verification fixture happens to have created.
+# See adr/0007-split-the-landing-table-contract-from-its-population.md
+
+version: 2
+
+sources:
+  - name: raw
+    description: >
+      Landing area in the warehouse holding rows copied verbatim from the
+      upstream system. Populated by the pipeline's extract step, never by dbt.
+    database: warehouse_db
+    schema: raw
+    tables:
+      - name: customers
+        description: >
+          Customer rows as they arrive from upstream, before any transformation.
+          The extract copies whatever columns it finds, so this table reflects
+          the upstream schema including any drift in it.
+        columns:
+          - name: customer_id
+            description: >
+              Upstream primary key. The transformation names this column
+              explicitly, which is what makes an upstream rename surface as a
+              build failure instead of passing through unnoticed.
+          - name: first_name
+          - name: last_name
+          - name: email
+          - name: country
+          - name: signup_date
+          - name: is_active
