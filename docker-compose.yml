@@ -278,6 +278,12 @@ services:
       POSTGRES_WAREHOUSE_DB: warehouse_db
       AIRFLOW_DAG_ID: customer_elt
       AGENT_POLL_INTERVAL_SECONDS: ${AGENT_POLL_INTERVAL_SECONDS:-20}
+      # Normally the pinned dbt executable installed in the image. Exposed as
+      # an override only so the presentation runbook can inject a transparent,
+      # deterministic validator outage and demonstrate the graph's bounded
+      # `unfixable` branch. Leaving it unset preserves the production-shaped
+      # path used by every ordinary run.
+      DBT_EXECUTABLE: ${AGENT_DBT_EXECUTABLE:-/opt/dbt-venv/bin/dbt}
       # An OpenAI-COMPATIBLE endpoint; the prefix names the protocol, not the
       # supplier. See adr/0018-depend-on-an-openai-compatible-endpoint-not-a-vendor.md
       OPENAI_BASE_URL: ${OPENAI_BASE_URL}

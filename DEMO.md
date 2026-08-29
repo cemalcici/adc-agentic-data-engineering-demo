@@ -1,361 +1,520 @@
-# Demoyu sunmak
+# Demoyu kendi ortamınızda çalıştırın
 
-Buradaki her adım ezberden değil, bu belgeyi takip ederek çalıştırıldı. Bir adım
-yazdığını üretmiyorsa, bu sistemde olduğu kadar belgede de bir kusurdur —
-[Ters giderse](#ters-giderse) bölümüne bakın.
+Bu rehber, repoyu daha sonra kendi bilgisayarında denemek isteyenler içindir.
+Kurulumdan başlayarak üç davranışı çalıştırır:
 
-**Şekli:** yaklaşık on iki dakika demo, artı sorular. Üç ekran: konsol, terminal
-ve Phoenix.
+1. Bir şema değişikliği pipeline'ı kırar; ajan öneri üretir; insan reddeder.
+2. Kalıcı arıza yeni bir incident olarak tekrar ele alınır; insan onaylar;
+   ajan düzeltmeyi uygulayıp kendi başlattığı koşuyla doğrular.
+3. İsteğe bağlı olarak doğrulayıcı devre dışı bırakılır; ajan sınırlı sayıda
+   deneyip `unfixable` sonucuyla durur.
 
----
+Bu PoC'nin temel iddiası şudur:
 
-## Demodan önce
+> Self-healing, ajanın üretime serbestçe yazması değildir. Ajan canlı kanıt
+> toplar, küçük bir değişikliği gerçek araçlarla doğrular ve eylem sınırında
+> insana döner.
 
-### 1. Başlangıç durumuna sıfırlayın
+## Gereksinimler
 
-Üç adım, ve herhangi birini atlamak sizi demonun çalışmadığı bir yerden
-başlatır.
+- Docker Desktop veya Docker Engine ile Compose desteği
+- Git
+- OpenAI uyumlu, structured output destekleyen bir model endpoint'i
+- Aşağıdaki yerel portların kullanılabilir olması:
+  - `5432`: PostgreSQL
+  - `6006`: Phoenix
+  - `8080`: Airflow
+  - `8501`: Streamlit
+
+İlk kurulum Docker imajlarını oluşturduğu için birkaç dakika sürebilir.
+
+## 1. Ortam değişkenlerini hazırlayın
+
+Repo kökünde örnek dosyayı kopyalayın:
 
 ```bash
-git checkout dbt/          # önceki koşunun uyguladığı düzeltmeyi at
-docker compose down -v     # sürüklenmiş kaynağı ve veritabanlarını at
-docker compose up -d       # her şeyi yeniden kur ve başlat
+cp .env.example .env
 ```
 
-Neden üç adım: sistemin kendi iyileşmesi **`dbt/` içine bir düzeltme yazar ve
-orada bırakır** — düzeltme işe yaramamış olsa bile (ADR-0025). Ve drift
-tetikleyicisi kendini geri alamaz (ADR-0014). Yani onarılmış bir transformation
-ile sürüklenmiş bir kaynak *çalışan* bir pipeline demektir; demonun kıracak bir
-şeyi kalmaz.
+`.env` içindeki `replace-me` değerlerini değiştirin. Özellikle şunlar gereklidir:
 
-Soğuk başlangıç imaj önbelleği sıcakken yaklaşık **iki dakika**, ilk seferde
-yaklaşık altı dakika sürer çünkü imajları kurar. Bunu seyirci karşısında
-başlatmayın.
+- PostgreSQL parolası
+- Airflow admin ve viewer parolaları
+- Airflow JWT secret'ı
+- Dashboard veritabanı parolası
+- Model endpoint URL'si, API anahtarı ve model adı
 
-### 2. Gerçekten hazır mı, bakın
+Gerçek `.env` dosyasını commit etmeyin veya terminal çıktısına yazdırmayın.
+
+## 2. Stack'i başlatın
+
+```bash
+docker compose up -d
+```
+
+Stack şu bileşenleri başlatır:
+
+| Bileşen | Görevi | Adres |
+| --- | --- | --- |
+| PostgreSQL | Kaynak, warehouse ve incident store | `localhost:5432` |
+| Airflow | ELT pipeline ve gerçek koşu durumu | <http://localhost:8080> |
+| Agent | Hata tespiti, teşhis, öneri, uygulama ve doğrulama | Container servisi |
+| Phoenix | Ajan trace'leri | <http://localhost:6006> |
+| Streamlit | Operatör konsolu | <http://localhost:8501> |
+
+## 3. Kurulumu doğrulayın
 
 ```bash
 ./verify-stack.sh
 ```
 
-**19 passed, 0 failed** bekleyin. İki satır diğerlerinden önemli:
+Beklenen sonuç:
 
-- `source identifier is 'customer_id' (no drift applied)` — demo kırılmamış
-  durumda başlıyor. `cust_id` yazıyorsa sıfırlama olmamış demektir.
-- `endpoint: ok (...) — endpoint answered` — dil modeli cevap verdi. Makinenin
-  dışındaki tek bağımlılık bu, ve bunu insanların karşısında değil burada
-  öğrenirsiniz.
+```text
+19 passed, 0 failed
+```
 
-### 3. Üç ekranı açın
+Özellikle şu kontrollerin geçtiğini doğrulayın:
 
-| Ekran | Nerede | Niçin |
-| --- | --- | --- |
-| Konsol | http://localhost:8501 | Demo burada geçiyor |
-| Terminal | bu deponun içinde herhangi bir yer | Bir komut, bir kez |
-| Phoenix | http://localhost:6006 | Sonra açılacak, tek bir an için |
+- Kaynak kolonunun `customer_id` olması ve drift uygulanmamış olması
+- Model endpoint'inin cevap vermesi
+- Bütün servislerin hazır olması
 
-Phoenix'i **Projects** sayfasında bırakın. Henüz bir trace açmayın — onun anı
-var.
+İlk Airflow koşusunun tamamlanmasını bekleyin. Ardından Streamlit'te
+`PIPELINE HEALTHY` görünmelidir.
 
-### 4. Yedeği elinizin altında tutun
+## Arayüzleri tanıyın
 
-Başarılı bir koşunun kaydı, aramadan bulabileceğiniz bir yerde. Model internet
-üzerinden geliyor ve yanlış anda yavaş kalabilir. Canlı görünen bir şey değil,
-bilerek bir kayıt — [Ters giderse](#ters-giderse) bölümüne bakın.
+### Streamlit operatör konsolu
 
----
+<http://localhost:8501>
 
-## Demo
+Konsol pipeline sağlığını warehouse tablosundan değil, Airflow'daki son koşudan
+okur. Bunun nedeni başarısız bir koşudan sonra eski mart tablosunun hâlâ
+sorgulanabilir olmasıdır. Veri mevcut görünebilirken pipeline kırık olabilir.
 
-### 1. Kimsenin kaygılanmadığı bir pipeline
+Konsolun yetkisi bilinçli olarak dardır:
 
-**Gösterin:** konsol. `PIPELINE HEALTHY` yazıyor.
+- Incident kayıtlarını okuyabilir.
+- Yalnızca operatör kararını yazabilir.
+- dbt projesine erişemez.
+- Airflow koşusu başlatamaz.
 
-> Bu küçük bir veri hattı. Beş dakikada bir yukarıdaki sistemden müşteri
-> kayıtlarını kopyalıyor ve iş biriminin okuduğu bir tabloyu yeniden kuruyor.
-> Yeşil, ve kimse onu düşünmüyor.
+### Airflow
 
-Bir an ekranda bırakın. Seyircinin kırmızıyı hissetmesi için önce yeşili görmüş
-olması gerekiyor.
+<http://localhost:8080>
 
-### 2. Yukarıdaki ekip bir kolonun adını değiştiriyor
+`.env` dosyasında tanımladığınız admin kullanıcısıyla giriş yapın.
+`customer_elt` DAG'ı iki task içerir:
 
-**Yapın:** terminalde,
+1. `extract_customers`: Kaynak tablonun o anki şemasını warehouse'a kopyalar.
+2. `dbt_run`: Staging ve mart modellerini oluşturur.
+
+### Phoenix
+
+<http://localhost:6006>
+
+`self-healing-pipeline` projesi ajanın trace'lerini içerir. Bir incident'ın
+Streamlit'teki **How did the agent arrive at that?** bağlantısı sizi ilgili
+trace'e götürür.
+
+## Senaryo 1: Öneriyi reddedin, sonra iyileşmeyi onaylayın
+
+Bu senaryo insan onay kapısının iki tarafını gösterir. İlk incident reddedilir;
+dbt projesi değişmez. Arıza kalıcı olduğu için ajan yeni bir incident açar.
+İkinci incident onaylanır ve pipeline iyileşir.
+
+### 1. Sağlıklı başlangıcı kontrol edin
+
+Streamlit'i açın ve `PIPELINE HEALTHY` durumunu doğrulayın.
+
+İsterseniz başlangıçtaki dbt çalışma ağacını da kontrol edin:
+
+```bash
+git status --short dbt/
+```
+
+Çıktı boş olmalıdır.
+
+### 2. Upstream şema değişikliğini uygulayın
 
 ```bash
 docker compose --profile drift run --rm --build drift
 ```
 
-> Şirketin başka bir yerinde bir ekip kendi veritabanlarında bir kolonun adını
-> değiştiriyor. `customer_id`, `cust_id` oluyor. Aşağıda birinin buna bağlı
-> olduğundan haberleri yok — ve bu dikkatsizlik değil, işler böyle yürüyor.
+Komut kaynak tablodaki `customer_id` kolonunu `cust_id` olarak değiştirir.
+Beklenen çıktı eski kolonun gittiğini, yeni kolonun geldiğini ve değişiklikten
+etkilenen kayıt sayısını gösterir.
 
-Komut neyi değiştirdiğini ve kaç kaydın bu kolonu taşıdığını yazdırır.
+Drift servisi yalnızca kaynak veritabanına erişebilir. dbt projesini göremez ve
+değişikliği geri alamaz.
 
-### 3. Kırılıyor, ama veri gayet iyi görünüyor
+### 3. Pipeline'ı Airflow'dan manuel tetikleyin
 
-**Gösterin:** konsol. Yaklaşık beş dakika içinde `PIPELINE FAILING` oluyor.
+Pipeline normalde beş dakikada bir çalışır. Beklemek istemiyorsanız:
 
-Zamanlamayı beklemek istemezseniz http://localhost:8080 adresindeki Airflow
-arayüzünden tetikleyebilirsiniz — ama beklemenin bir değeri var: bu gerçek
-aralık, ve öyle söylemek "anında oluyor" demekten dürüst.
+1. Airflow'da **DAGs** listesini açın.
+2. `customer_elt` DAG'ını seçin.
+3. DAG'ın unpaused olduğunu doğrulayın.
+4. Sağ üstteki **Trigger DAG** düğmesine basın.
+5. Yapılandırma ekranı açılırsa varsayılan değerlerle onaylayın.
 
-> Şimdi ilginç kısım. Pipeline başarısız — ama iş biriminin okuduğu tablo hâlâ
-> yerinde, hâlâ dünkü satırlarla dolu, hâlâ her sorguya cevap veriyor. *Veriye*
-> bakan biri her şeyin yolunda olduğunu söylerdi. Sessiz pipeline arızası tam
-> olarak böyle görünür — ve bu konsolun neden veriyi değil koşuların durumunu
-> okuduğunun sebebi bu.
+Airflow sürümüne bağlı olarak düğmenin konumu veya etiketi küçük farklılık
+gösterebilir.
 
-Demonun senaryosuz en güçlü anı burası. Tasarlanmadı, sistemi kurarken ortaya
-çıktı.
+Yeni koşuda beklenen sonuç:
 
-### 4. Bunu kimse bildirmedi
+- `extract_customers`: başarılı
+- `dbt_run`: başarısız
+- Bütün DAG run'ı: başarısız
 
-**Gösterin:** konsol, bir dakika kadar sonra. Teşhis kendiliğinden beliriyor.
+`dbt_run` log'unda `customer_id` kolonunun bulunamadığını görebilirsiniz.
 
-> Kimse kayıt açmadı. Ajan koşunun başarısız olduğunu fark etti, hatayı okudu,
-> gidip yukarıdaki kaynakta şu anda ne olduğuna baktı ve neyin değiştiğini
-> çıkardı.
+### 4. Yanlış yeşil durumunu gözlemleyin
 
-Açıklamayı sesli okuyun. Sesli okunmak için yazıldı.
+Streamlit kısa süre sonra `PIPELINE FAILING` gösterir. Buna rağmen son başarılı
+mart tablosu warehouse'da durmaya devam eder. Bu, görünür veri ile onu üreten
+son sürecin sağlığının aynı şey olmadığını gösterir.
 
-### 5. Bir iş arkadaşının değişikliği gibi inceleyin
+Henüz incident görünmüyorsa ajan bir sonraki polling turunu bekliyor olabilir.
+Varsayılan polling aralığı 20 saniyedir.
 
-**Gösterin:** teşhisin altındaki önerilen değişiklik.
+### 5. İlk teşhis ve öneriyi inceleyin
 
-> Değiştirmek istediği şey bu. Tek satır. Bunu bilerek dosya olarak değil fark
-> olarak gösteriyoruz, çünkü bir iş arkadaşınızın işini de böyle incelerdiniz.
->
-> Ve bunu zaten başarıyla derledi — gerçek veriye karşı, projenin tamamıyla,
-> pipeline'ın kullandığı dbt'nin aynısıyla. Yani önünüzdeki soru "bu derleniyor
-> mu" değil. "Doğru şeyi mi söylüyor" — ki bir insanın yapması gereken kısım da
-> bu.
+Ajan şu kanıtları canlı olarak toplar:
 
-Sayfanın tazelemeyi bıraktığına dikkat edin. Bir karar açıkken bunu bilerek
-yapıyor: siz okurken altınızda hiçbir şey oynamasın diye.
+- Son başarısız Airflow run'ı ve failing task
+- Task log'u
+- Kaynak sistemin mevcut kolonları
+- Hata veren dbt modelinin güncel içeriği
 
-### 6. Nasıl karar verdi, ve ne tuttu
+Ardından kök neden teşhisi ve tam dosya içeriği olarak bir aday düzeltme üretir.
+Aday, operatöre sunulmadan önce:
 
-**Yapın:** **How did the agent arrive at that?** bağlantısına tıklayın. Phoenix
-bu incident'ın trace'i üzerinde açılır.
+- dbt projesinin scratch kopyasına yazılır,
+- ayrı validation şemalarında bütün proje build edilir,
+- build başarısızsa hata modele geri verilerek en fazla iki kez yeniden denenir.
 
-Bunu sunmadan önce aşağıdaki [Phoenix'i okumak](#phoenixi-okumak) bölümüne
-bakın — en yabancı gelmesi muhtemel ekran bu.
+Streamlit'te teşhisi ve önerilen diff'i inceleyin. Bu aşamada gerçek dbt
+dosyasına hiçbir şey yazılmamıştır.
 
-> Attığı her adım burada. Arızayı fark etti, log'u aldı, canlı şemayı inceledi,
-> modeli çağırdı, bir düzeltme önerdi, o düzeltmeyi derledi, kaydetti.
->
-> Ve şurada durmaya değer: model çağrısına tıklayın, gönderilen prompt'u ve
-> gelen cevabı olduğu gibi görüyorsunuz. Burada kara kutu olan hiçbir şey yok.
->
-> Bütün incident birkaç saniye sürdü ve bir centin çok altında kaldı.
+### 6. Trace'i inceleyin
 
-### 7. Karar
+Streamlit'teki **How did the agent arrive at that?** bağlantısını açın.
+Phoenix'te aşağıdakine benzer bir span ağacı görmelisiniz:
 
-**Yapın:** konsola dönün. **Approve**'a tıklayın.
-
-> Şu ana kadar hiçbir şey yazılmadı. Buraya kadarki her şey okumak ve akıl
-> yürütmekti. Bu tıklama, harekete geçmesine izin veren tek şey — ve harekete
-> geçebilmesinin tek yolu. Bu sistemde projeye bunsuz yazan bir yol yok.
-
-### 8. Yeniden yeşil, ve kimse bir şey yazmadı
-
-**Gösterin:** konsol. Düzeltmenin uygulandığını, sonra bir koşunun başladığını,
-sonra `PIPELINE HEALTHY` olduğunu ve incident'ın çözüldü olarak kaydedildiğini
-gösterir. Bir dakikadan kısa sürer.
-
-> Dosyayı yazdı, bir pipeline koşusu başlattı ve *o* koşuyu izledi — sonradan
-> biten herhangi birini değil — ve pipeline düzeldi.
->
-> Kimse bir şey yazmadı. Biri tek satırlık bir değişikliği okudu ve evet dedi.
-
-### 9 (isteğe bağlı). "Hayır" ne yapıyor
-
-Vakit varsa göstermeye değer, çünkü insanların şüphe ettiği iddia bu.
-
-Sıfırlayın, tekrar drift uygulayın ve bu kez **Reject**'e basın. Pipeline
-kırmızı kalır, transformation projesine dokunulmaz, ve geçmiş sizin
-reddettiğinizi kaydeder. Sistemde ret işleyen hiçbir kod yok — reddetmek,
-ajanın gidecek bir yeri olmadığı için çalışıyor.
-
-Vakit darsa göstermek yerine bunu söyleyin.
-
----
-
-## Phoenix'i okumak
-
-Bu ekranı hiç kullanmamış biri için yazıldı. Buradan dört şeye ihtiyacınız var.
-
-**Nereye düşersiniz.** Projects sayfası iki proje listeler:
-`self-healing-pipeline` bu demonun, `default` Phoenix'in kendisinin ve boş.
-Birincisine girin.
-
-**Spans değil, Traces.** **Traces** sekmesi her ajan geçişi için tek satır
-verir; istediğiniz bu. **Spans** sekmesi her geçişin her adımını tek tek
-listeler, ve ajan yirmi saniyede bir yokladığı için bunların çoğu yapacak bir
-şey bulamamış geçişlerdir. Onların duvarıyla açmak istediğiniz izlenim değil.
-
-**Asıl mesele span ağacı.** Bir trace açtığınızda ortada şunu görürsünüz:
-
-```
+```text
 agent_pass → detect_failure → fetch_failure_log → inspect_schema
            → diagnose → ChatOpenAI
            → propose_fix → ChatOpenAI → validate_candidate
            → record_proposal
 ```
 
-Bu ağaç, "nasıl karar verdi" sorusunun *cevabının kendisi*. Anlatmak yerine
-gösterin.
+İnceleyebileceğiniz noktalar:
 
-**Bir `ChatOpenAI` span'ine tıklayın.** Gönderilen prompt'un ve gelen cevabın
-tamamını gösterir. Seyircinin beklemediği kısım burası, ve raporun incelenebilir
-ajan davranışı argümanını en doğrudan destekleyen kısım da bu.
+- `fetch_failure_log`: Airflow'dan alınan hata
+- `inspect_schema`: Canlı kaynak şeması
+- `ChatOpenAI`: Modele gönderilen bağlam ve structured output
+- `validate_candidate`: İzole dbt build sonucu
+- Trace başlığı: Gecikme, token ve maliyet
 
-**Sayılar.** Trace başlığı gecikmeyi, toplam maliyeti ve token sayısını taşır.
-Ölçülen bir incident yaklaşık altı buçuk saniye ve bir centin çok altındaydı.
-Proje başlığı ise oturum boyunca toplamları taşır. Maliyet rakamını bilerek
-ekrana koyun — "bunu çalıştırmak ne tutuyor" size sorulacak bir soru, ve rakamın
-görünür olması söylemekten iyidir.
+### 7. İlk incident'ı reddedin
 
----
+Streamlit'e dönün ve **Reject** düğmesine basın.
 
-## Ters giderse
+Beklenen davranış:
 
-### Bir şeyin gerçekten ters gittiğine karar vermeden önce ne kadar beklenir
+- Incident `rejected` terminal durumuna geçer.
+- dbt projesine hiçbir değişiklik yazılmaz.
+- Ajan Airflow koşusu başlatmaz.
+- Pipeline kırmızı kalır.
 
-| Adım | Normal | Ters |
-| --- | --- | --- |
-| Drift sonrası kırmızıya dönme | 5 dakikaya kadar (zamanlama) | 6 dakikayı geçerse |
-| Teşhisin belirmesi | koşu başarısız olduktan sonra 1 dakikanın altında | 3 dakikayı geçerse |
-| Düzeltmenin uygulanıp yeşile dönmesi | 1 dakikanın altında | 3 dakikayı geçerse |
+History bölümünde `rejected` kaydını görebilirsiniz.
 
-Sabitlenmiş model üzerinde ölçüldü. Daha yavaş bir model ortadaki satırı uzatır
-— önceki bir model aynı iş için üç dakikaya yakın sürüyordu; runbook'un varsaymak
-yerine bakmayı söylemesinin sebebi bu.
+### 8. Yeni incident'ı bekleyin
 
-### Hiçbir şey belirmedi
+Ret yalnızca mevcut incident'ı kapatır; upstream şema değişikliği devam eder.
+In-flight incident kalmadığı için ajan sonraki turunda hâlâ başarısız olan son
+run'ı tekrar ele alır ve yeni bir incident açar.
 
-Konsol *"Nothing has been recorded for this failure yet"* diyor — ajan
-düşünüyorken de, çalışmıyorken de. İkisini ayırt edemiyor; bu bilinçli bir sınır,
-gözden kaçmış bir şey değil. Hangisi olduğuna siz bakın:
+Bu davranış hakkında iki önemli sınır vardır:
+
+- Yeni kayıt, önceki incident'ın revizyonu değil ayrı bir incident'tır.
+- Ajan önceki ret gerekçesini bilmez ve incident'lar arasında hafıza taşımaz.
+
+Bu nedenle ikinci öneri ilk öneriyle aynı olabilir. Ajan canlı log, şema ve
+modeli sıfırdan okuyarak tekrar teşhis üretir.
+
+### 9. İkinci incident'ı onaylayın
+
+İkinci öneri `proposed` durumuna ulaştığında diff'i inceleyin ve **Approve**
+düğmesine basın.
+
+Konsol yalnızca incident durumunu `approved` yapar. Değişikliği kendisi
+uygulamaz. Ajan bir sonraki turunda bu durumu okuyunca grafın eylem dalına
+geçer.
+
+### 10. İyileşmeyi doğrulayın
+
+Ajan:
+
+1. Onaylanan tam dosya içeriğini dbt projesine yazar.
+2. Airflow API üzerinden yeni bir pipeline run'ı başlatır.
+3. Başlattığı run'ın ID'sini incident'a kaydeder.
+4. Yalnızca bu run'ı izler.
+5. Run başarılıysa incident'ı `resolved` yapar.
+
+Streamlit'te önce uygulama durumunu ve `verifying_run_id` değerini, ardından
+`PIPELINE HEALTHY` sonucunu görmelisiniz. History bölümünde ilk incident
+`rejected`, ikinci incident `resolved` olarak kalır.
+
+Airflow'da `verifying_run_id` ile eşleşen run'ı açarak iki task'ın da başarılı
+olduğunu doğrulayabilirsiniz.
+
+### 11. Uygulanan dosya değişikliğini inceleyin
 
 ```bash
-docker compose logs --tail 20 agent
+git diff -- dbt/
 ```
 
-- `watching customer_elt every 20s` ve sonrasında bir şey yoksa — hayatta ve
-  çalışıyor.
-- Hiç yeni satır yoksa ya da konteyner gitmişse — yeniden başlatın:
-  `docker compose up -d agent`.
+Beklenen değişiklik staging modelinde yeni upstream ismini okuyup downstream
+sözleşmesini koruyan küçük bir alias'tır:
 
-### Model yavaş kalıyor ya da kullanılamaz bir şey döndürüyor
+```sql
+cust_id as customer_id
+```
 
-Ajan derlenmeyen kendi çıktısını iki kez düzeltir, dolayısıyla kötü bir ilk
-cevap çoğu zaman kendi kendine toparlanır — olursa bunu sesli söylemeye değer,
-çünkü raporun öne sürdüğü iddialardan biri.
+## Senaryo 2: Doğrulayıcı yoksa ajan durur
 
-Dört dakika içinde toparlamazsa **durun ve kayda geçin**. Açıkça söyleyin:
+Bu isteğe bağlı senaryo kontrollü fault injection kullanır. Amaç modeli kötü
+cevap vermeye zorlamak değil, aday düzeltme doğrulanamadığında grafın sınırlı
+retry sonrasında durduğunu göstermektir.
 
-> Model bugün cevap vermiyor. Şimdi daha önceki bir koşuyu göstereceğim — aynı
-> sistem, aynı senaryo.
+Senaryonun beklenen sonucu:
 
-Hazır bir sonucu canlı ekrana yerleştirmeye çalışmayın. Bunun için bilerek bir
-mekanizma yok (ADR-0028): prova edilmiş bir cevabı ajanın kendi cevabıymış gibi
-sessizce gösterebilen bir demo, kendi konusunun aleyhine argüman üretir.
+```text
+validator unavailable → bounded retries → give_up → unfixable
+```
+
+### 1. Temiz başlangıca dönün
+
+```bash
+git restore dbt/
+docker compose down -v
+docker compose up -d
+./verify-stack.sh
+```
+
+`19 passed, 0 failed` ve Streamlit'te `PIPELINE HEALTHY` bekleyin.
+
+### 2. Doğrulayıcı arızasını enjekte edin
+
+Agent container'ını, yalnızca bu senaryo için var olmayan bir dbt executable
+yoluyla yeniden oluşturun:
+
+```bash
+AGENT_DBT_EXECUTABLE=/demo-fault/dbt-unavailable docker compose up -d --force-recreate agent
+```
+
+Bu override:
+
+- model endpoint'ini değiştirmez,
+- Airflow ve PostgreSQL erişimini bozmaz,
+- incident store'u değiştirmez,
+- yalnızca adayın izole dbt build'ini çalıştırılamaz hâle getirir.
+
+### 3. Drift'i uygulayıp pipeline'ı çalıştırın
+
+```bash
+docker compose --profile drift run --rm --build drift
+```
+
+Senaryo 1'deki adımlarla `customer_elt` DAG'ını Airflow UI üzerinden manuel
+tetikleyin.
+
+### 4. `unfixable` sonucunu gözlemleyin
+
+Ajan gerçek modelle teşhis ve aday üretir. Her `validate_candidate` çağrısı dbt
+executable bulunamadığı için başarısız olur. İlk deneme ve iki retry sonrasında
+`give_up` düğümü incident'ı `unfixable` olarak kapatır.
+
+Streamlit'te beklenen durum:
+
+- History içinde `unfixable` incident
+- Onaylanabilir proposal veya diff bulunmaması
+- Pipeline'ın kırmızı kalması
+
+Agent log'unu kontrol edin:
+
+```bash
+docker compose logs --tail 40 agent
+```
+
+Phoenix trace'inde tekrar eden aşağıdaki dalı inceleyin:
+
+```text
+propose_fix → validate_candidate
+      ↑              │
+      └──── retry ───┘
+                     └→ give_up → unfixable
+```
+
+Buradaki anlam “ajan düzeltmenin yanlış olduğunu kanıtladı” değildir. Ajan
+düzeltmenin doğru olduğunu kanıtlayamadığı için operatöre uygulanabilir bir
+öneri sunmadan durmuştur.
+
+### 5. Fault injection'ı kaldırın
+
+Stack'i yeniden kurduğunuzda ajan varsayılan gerçek dbt executable'ına döner:
+
+```bash
+git restore dbt/
+docker compose down -v
+docker compose up -d
+./verify-stack.sh
+```
+
+Komuttaki değişkeni `export` etmeyin. Export ettiyseniz yeniden başlatmadan önce:
+
+```bash
+unset AGENT_DBT_EXECUTABLE
+```
+
+## Sistemi başlangıç durumuna döndürün
+
+Ana senaryoda onaylanan değişiklik dbt dosyasında kalır. Drift ise PostgreSQL
+volume'unda kalır. Tam sıfırlama için ikisini de temizleyin:
+
+```bash
+git restore dbt/
+docker compose down -v
+docker compose up -d
+./verify-stack.sh
+```
+
+Neden iki temizlik gerekir:
+
+- `git restore dbt/`, ajanın uyguladığı takip edilen dbt değişikliğini atar.
+- `docker compose down -v`, sürüklenmiş kaynağı ve veritabanı durumunu atar.
+
+Yalnızca birini çalıştırırsanız kaynak ve transformation birbirine uyumlu veya
+ters yönde uyumsuz kalabilir; sonraki denemeniz beklediğiniz başlangıç
+durumundan başlamaz.
+
+## Sorun giderme
+
+### Bir servisin durumunu kontrol edin
+
+```bash
+docker compose ps
+```
+
+### Ajan sonucu görünmüyor
+
+```bash
+docker compose logs --tail 40 agent
+```
+
+- `watching customer_elt every 20s`: Ajan çalışıyor ve polling yapıyor.
+- `pass failed`: Hata tipi aynı satırda görünür.
+- Container durmuşsa: `docker compose up -d agent`.
 
 ### Pipeline kırmızıya dönmedi
 
-Neredeyse her zaman sıfırlamadır. Bakın:
+1. Airflow'da manuel run'ın gerçekten oluştuğunu kontrol edin.
+2. `./verify-stack.sh` çıktısında kaynak kolonunun `cust_id` olduğunu doğrulayın.
+3. Önceki düzeltmenin kalıp kalmadığını kontrol edin:
 
 ```bash
-git status --short dbt/     # boş olmalı
-./verify-stack.sh           # başlamadan önce 'no drift applied' demeli
+git status --short dbt/
 ```
+
+### Reject sonrasında yeni incident oluşmadı
+
+1. History'de ilk incident'ın `rejected` olduğunu doğrulayın.
+2. Agent log'unda yeni bir pass olup olmadığına bakın.
+3. En az bir polling aralığı ve model yanıt süresi kadar bekleyin.
+
+### Model endpoint'i çalışmıyor
+
+```bash
+./verify-stack.sh
+docker compose logs --tail 40 agent
+```
+
+Endpoint URL'sini, model adını, API anahtarını ve structured output desteğini
+kontrol edin. Hazırlanmış bir incident'ı canlı ajan çıktısı gibi incident
+store'a yazmayın; bu repo böyle bir fallback sağlamaz (ADR-0028).
 
 ### Phoenix açılmıyor
 
-Onun yerine konsolu gösterin ve trace'in sonradan da bakılabilir olduğunu
-söyleyin. Ajan ona bağlı değil — izler düşer, başka hiçbir şey değişmez.
-
----
-
-## Size sorulacak sorular
-
-### "Önceki incident'ları hatırlıyor mu?"
-
-Hayır, bilerek. Her incident sıfırdan teşhis edilir: daha önceki bir sonucu
-yeniden kullanmak yerine transformation'ı yeniden okur ve canlı kaynağı yeniden
-inceler (ADR-0020). Güvenli olan varsayılan bu — hatırlayan bir ajan, değişmiş
-bir sistem hakkında kendinden emin biçimde yanılabilir.
-
-Hafıza gerçek ve iyi anlaşılmış bir genişleme: çözülmüş incident'ları teşhis
-adımına geri beslemek. Burada yok, çünkü demonun sonra savunmak zorunda kalacağı
-yeni bir arıza biçimi ekliyor.
-
-### "Planlama yapıyor mu, yoksa sıra sabit mi?"
-
-Sabit. Adımlar ajanın içinden geçtiği bir graf, kendi kurduğu bir plan değil.
-
-Bu, raporun anlattığı planlayıcı/uygulayıcı ayrımının uygulayıcı yarısı — ve
-hasar yarıçapı küçük olan yarısı. Planlayan bir ajan ne yapılacağına karar
-verir; bu ajan, bilinen belirli bir sorunun neye ihtiyacı olduğuna karar verir.
-Bir pilot için doğru sıralama bu.
-
-### "Neden MCP değil?"
-
-Airflow ve Postgres'e sıradan istemci kütüphaneleriyle ulaşıyor (ADR-0019). MCP
-yükselen standart, ama iki aracı olan tek bir ajan için gösterilebilir bir
-karşılığı olmadan iki servis ve bir hata ayıklama katmanı ekler. Araç katmanını
-MCP sunucularıyla değiştirmek grafı değiştirmezdi — doğal bir sonraki adım bu, ve
-bir eksiklik değil bilinçli bir tercih.
-
-### "Çalıştırmak ne tutuyor?"
-
-Şu an sabitlenmiş modelde incident başına bir centin altında, Phoenix'te trace
-başına görünür. Demonun tamamı — bir teşhis, bir öneri, bir doğrulama derlemesi —
-birkaç cent. Model seçimi üç modelin aynı arıza üzerinde ölçülmesiyle
-sabitlendi; karşılaştırmanın kaydı geliştirme deposunda tutuluyor.
-
-### "Ajan yanılırsa ne olur?"
-
-Üç ayrı cevap, ve birbirlerinden farklılar:
-
-- **Derlenmeyen bir şey yazarsa** — size hiç ulaşmaz. Ajan her adayı sunmadan
-  önce derler, kendini iki kez düzeltir, olmazsa incident'ı bir açıklamayla
-  `unfixable` olarak kapatır (ADR-0022).
-- **Derlenen ama yanlış bir şey yazarsa** — sizin incelemeniz tam da bunun için.
-  Doğrulama çalıştığını kanıtlar, doğru şeyi söylediğini değil; ve sistem aksini
-  iddia etmiyor.
-- **Düzeltme uygulanır ve pipeline yine de düzelmezse** — incident "uygulandı,
-  düzelmedi" olarak biter, diğer bütün sonlanmalardan ayrı, ve düzeltme sessizce
-  geri alınmaz, diskte kalır (ADR-0025). Geri almak, ikinci bir onay olmadan
-  ikinci bir yazma olurdu.
-
-### "Düzeltmeleri doğrudan uygulayamaz mı?"
-
-Uygulayabilirdi, ve bu sistem bilerek bir aşama geride duruyor. Rapor kademeli
-otonomiyi anlatıyor — izle, öner, korumalı değişiklik, otonom — ve burası
-*öner artı onaylanmış değişiklik* aşamasında; raporun pilot için önerdiği aşama
-da bu. Kapıyı kaldırmak için gereken her şey mevcut; eksik olan güven, ve o da
-önce bu aşamada çalıştırarak kazanılıyor.
-
----
-
-## Hâlâ çalıştığını doğrulamak
+Phoenix gözlemlenebilirlik katmanıdır; ajanın çalışması ona bağlı değildir.
+Phoenix log'unu kontrol edin:
 
 ```bash
-./verify-stack.sh    # yığının hazır olduğuna dair 19 doğrulama
-./smoke-tests.sh     # demonun dayandığı iki iddia
+docker compose logs --tail 40 phoenix
 ```
 
-`smoke-tests.sh` drift'in pipeline'ı gerçekten kırdığını ve onaylanmış bir
-düzeltmenin onu gerçekten düzelttiğini kontrol eder. İki doğrulama da dil modeli
-çağırmaz, dolayısıyla ikisi de "model bugün farklı cevap verdi" diye başarısız
-olamaz — ve ikisi de ajanın açıklamasının iyi okunup okunmadığı ya da
-değişikliğin bir bakışta anlaşılacak kadar küçük olup olmadığı hakkında hiçbir
-şey kanıtlamaz. Onlar provanın işi.
+### Onaylandı ancak pipeline düzelmedi
 
-Çalıştırmadan önce bilinmesi gereken iki şey: ajan yanı başında koşuyor ve
-testlerin yol açtığı arızayı teşhis ediyor, dolayısıyla bir koşu hiç değil bir
-centin küçük bir kesri kadar tutar; ve testler yığını senaryonun ortasında
-bırakır, o yüzden prova etmeden önce sıfırlayın.
+Incident `verification_failed` olur ve uygulanan dosya diskte kalır. Ajan sessiz
+rollback yapmaz; rollback ikinci bir yazma eylemi ve ayrı bir yetki kararıdır.
+`git diff -- dbt/` ile uygulanan değişikliği inceleyip ardından stack'i
+sıfırlayın.
+
+## Davranışın sınırları
+
+### Incident'lar arasında hafıza var mı?
+
+Hayır. Her incident canlı run, log, şema ve dbt modeli üzerinden sıfırdan
+teşhis edilir. Reddedilen önerinin gerekçesi sonraki incident'a aktarılmaz.
+
+### Ajan serbest planlama yapıyor mu?
+
+Hayır. LangGraph adımların sırasını sabitler. Model teşhis ve düzeltmenin
+içeriğini seçer; hangi sistemlere hangi sırayla gidileceğini planlamaz.
+
+### Neden MCP kullanılmıyor?
+
+PoC iki araca Airflow REST API ve PostgreSQL istemcisiyle erişir. MCP doğal bir
+genişleme noktasıdır; fakat tek başına grafın yetki veya doğrulama modelini
+değiştirmez.
+
+### Ajan yanlış bir şey üretirse ne olur?
+
+- Aday build olmazsa operatöre ulaşmaz; retry sınırında `unfixable` olur.
+- Aday build olur ancak semantik olarak yanlışsa insan diff'i reddedebilir.
+- Onaylanan aday pipeline'ı düzeltmezse `verification_failed` olur.
+- Hedef dosyayı model seçmez; hedef başarısız dbt log'undan çıkarılır.
+- Yazma kapsamı yalnızca `models/*.sql` altındadır.
+
+### Onay kapısı nasıl uygulanıyor?
+
+- Veritabanı yalnızca `proposed → approved` geçişine izin verir.
+- Ajanın yazma dalı yalnızca `approved` durumundan ulaşılabilir.
+- Streamlit yalnızca karar sütununu güncelleyebilir.
+- Streamlit'in dbt mount'u ve Airflow run başlatma yetkisi yoktur.
+
+### İyileşme nasıl doğrulanıyor?
+
+Ajan değişikliği yazdıktan sonra kendisi yeni bir Airflow run'ı başlatır ve
+yalnızca kaydettiği run ID'sini izler. Düzeltmeden önce başlamış başka bir
+koşunun sonucunu kullanmaz (ADR-0024).
+
+## Otomatik kontroller
+
+Stack hazır olduğunda:
+
+```bash
+./verify-stack.sh
+./smoke-tests.sh
+```
+
+`verify-stack.sh` servis ve başlangıç durumu kontrollerini çalıştırır.
+`smoke-tests.sh`, model çağırmadan iki temel iddiayı sınar:
+
+- Drift pipeline'ı gerçekten kırar.
+- Onaylanmış doğru düzeltme pipeline'ı gerçekten iyileştirir.
+
+Smoke test stack'i senaryonun ortasında bırakabilir. Manuel denemeden önce
+**Sistemi başlangıç durumuna döndürün** bölümündeki adımları yeniden uygulayın.
