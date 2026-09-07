@@ -12,7 +12,7 @@ approval gate a property of the routing rather than of anything held in memory.
 The shape
 ---------
 
-Sixteen nodes behind one router. This is the only place the graph's shape is
+Seventeen nodes behind one router. This is the only place the graph's shape is
 written down; no other document enumerates these nodes, because a second copy is
 what let the first one go stale.
 
@@ -45,9 +45,11 @@ what let the first one go stale.
                  │
             ┌────┴────────┐
             ▼             ▼
-     record_proposal   give_up
+     judge_proposal    give_up
             │             │
-           END           END
+     record_proposal     END
+            │
+           END
 
 
 The vocabulary
@@ -114,6 +116,7 @@ import datetime as dt
 import json
 from typing import Any, Literal, TypedDict
 
+import judge
 import proposal
 import sandbox
 import traces
@@ -147,6 +150,7 @@ class AgentState(TypedDict, total=False):
     build_output: str
     validated: bool
     refusal: str
+    judge_review: dict[str, Any]
 
     # The applying branch.
     contents_to_write: str
@@ -192,6 +196,7 @@ def build_graph(
     store: IncidentStore,
     validator: Validator,
     llm: Any,
+    judge_llm: Any,
 ) -> Any:
     """Assemble the graph. Nodes are small and named after what they do."""
 
@@ -421,12 +426,27 @@ def build_graph(
 
     def after_validation(
         state: AgentState,
-    ) -> Literal["record_proposal", "propose_fix", "give_up"]:
+    ) -> Literal["judge_proposal", "propose_fix", "give_up"]:
         if state.get("validated"):
-            return "record_proposal"
+            return "judge_proposal"
         if state.get("attempts", 0) < settings.max_fix_attempts:
             return "propose_fix"
         return "give_up"
+
+    def judge_proposal(state: AgentState) -> AgentState:
+        """Review only the buildable candidate; the human retains the decision."""
+        try:
+            review = judge.evaluate(
+                judge_llm,
+                {key: state[key] for key in (
+                    "failing_task", "failure_output", "model_path", "model_sql", "source_columns"
+                )},
+                state["diagnosis"], state["candidate_sql"], state["candidate_summary"],
+            )
+        except Exception as error:  # noqa: BLE001 - advisory failure cannot veto a proposal
+            review = {"status": "unavailable", "error_type": type(error).__name__}
+        review.update({"producer_model": settings.llm_model, "judge_model": settings.judge_model})
+        return {**state, "judge_review": review}
 
     def record_proposal(state: AgentState) -> AgentState:
         """Write the proven proposal down, and stop."""
@@ -435,6 +455,7 @@ def build_graph(
             target_model_path=state["model_path"],
             model_contents_before=state["model_sql"],
             model_contents_after=state["candidate_sql"],
+            judge_review=state["judge_review"],
         )
         return {
             **state,
@@ -545,6 +566,7 @@ def build_graph(
     graph.add_node("resume_incident", resume_incident)
     graph.add_node("propose_fix", propose_fix)
     graph.add_node("validate_candidate", validate_candidate)
+    graph.add_node("judge_proposal", judge_proposal)
     graph.add_node("record_proposal", record_proposal)
     graph.add_node("give_up", give_up)
     graph.add_node("load_approved", load_approved)
@@ -569,6 +591,7 @@ def build_graph(
     )
     graph.add_edge("propose_fix", "validate_candidate")
     graph.add_conditional_edges("validate_candidate", after_validation)
+    graph.add_edge("judge_proposal", "record_proposal")
 
     # Both endings of the proposing branch stop here. Nothing leads from a
     # recorded proposal to anything that writes or triggers: that is the gate.

@@ -1,7 +1,7 @@
 """The operator console.
 
 Reads the pipeline's health from the orchestrator and everything else from the
-incident record, and writes exactly one thing back: the decision.
+incident record, and writes the decision and human feedback on the judge review.
 
 It never asks the warehouse whether the pipeline is working. A failed run leaves
 the previous output in place, so data would report green throughout an incident
@@ -145,6 +145,26 @@ def diagnosis_panel(incident: dict[str, Any]) -> None:
         st.code(incident.get("failure_output") or "—", language="text")
 
 
+def judge_panel(incident: dict[str, Any]) -> None:
+    review = incident.get("judge_review") or {}
+    st.markdown("#### LLM-as-Judge")
+    st.text(f"Üretici: {review.get('producer_model', '—')} · Judge: {review.get('judge_model', '—')}")
+    if review.get("status") != "completed":
+        st.warning("Judge değerlendirmesi alınamadı. Öneriyi inceleyip karar verebilirsiniz.")
+        return
+    labels = {"problem_alignment": "Sorunla uyum", "solution_adequacy": "Çözümün yeterliliği",
+              "behavior_preservation": "Davranışın korunması"}
+    results = {"appropriate": "Uygun", "issue": "Sorun var",
+               "insufficient_evidence": "Kanıt yetersiz"}
+    for key, label in labels.items():
+        check = review["checks"][key]
+        st.text(f"{label}: {results[check['result']]}")
+        st.write(check["reason"])
+        st.code("\n".join(check["evidence"]), language="text")
+    with st.expander("Judge'ın öneriyi görmeden yaptığı kanıt incelemesi"):
+        st.json(review["independent_assessment"])
+
+
 def proposal_panel(incident: dict[str, Any], store: IncidentStore) -> None:
     before = incident.get("model_contents_before") or ""
     after = incident.get("model_contents_after") or ""
@@ -166,6 +186,15 @@ def proposal_panel(incident: dict[str, Any], store: IncidentStore) -> None:
         "it means the right thing — which is yours to judge.</div>",
         unsafe_allow_html=True,
     )
+
+    judge_panel(incident)
+    if (incident.get("judge_review") or {}).get("status") == "completed":
+        st.selectbox(
+            "Judge değerlendirmesine ilişkin görüşünüz",
+            ["Seçiniz", "Katılıyorum", "Kısmen katılıyorum", "Katılmıyorum"],
+            key=f"judge_feedback_{incident['id']}",
+        )
+        st.text_area("Açıklama (isteğe bağlı)", key=f"judge_note_{incident['id']}")
 
     # Callbacks rather than `if st.button(...)`. A click reruns the script, and
     # by the time it reruns the incident may have moved — in which case this
@@ -195,10 +224,22 @@ def proposal_panel(incident: dict[str, Any], store: IncidentStore) -> None:
 
 def _decide(store: IncidentStore, incident: dict[str, Any], decision: str) -> None:
     """Record a decision against the incident as the page last saw it."""
+    feedback = None
+    if (incident.get("judge_review") or {}).get("status") == "completed":
+        feedback = {"Katılıyorum": "agree", "Kısmen katılıyorum": "partly_agree",
+                    "Katılmıyorum": "disagree"}.get(
+            st.session_state.get(f"judge_feedback_{incident['id']}")
+        )
+        if feedback is None:
+            _notify("missing", "Önce judge değerlendirmesine ilişkin görüşünüzü seçin.")
+            return
     recorded = store.record_decision(
         incident_id=int(incident["id"]),
         decision=decision,
         expected_state=incident["state"],
+        judge_feedback=feedback,
+        judge_feedback_note=(st.session_state.get(f"judge_note_{incident['id']}") or None)
+        if feedback else None,
     )
     if recorded:
         _notify("ok", f"Recorded: {decision}.")
@@ -266,6 +307,16 @@ def history_panel(rows: list[dict[str, Any]]) -> None:
             f'{link}</span></div>',
             unsafe_allow_html=True,
         )
+
+        if row.get("judge_review"):
+            with st.expander(f"#{row['id']} — Judge değerlendirmesi ve insan görüşü"):
+                st.code(row.get("model_contents_after") or "", language="sql")
+                judge_panel(row)
+                feedback = {"agree": "Katılıyorum", "partly_agree": "Kısmen katılıyorum",
+                            "disagree": "Katılmıyorum"}.get(row.get("judge_feedback"), "—")
+                st.text(f"İnsan görüşü: {feedback}")
+                if row.get("judge_feedback_note"):
+                    st.write(row["judge_feedback_note"])
 
 
 # --- the page ----------------------------------------------------------------

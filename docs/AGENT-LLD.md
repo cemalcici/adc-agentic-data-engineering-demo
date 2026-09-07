@@ -45,7 +45,8 @@ flowchart TD
     RI -->|iş yok| E3([END])
 
     PF --> VC[validate_candidate]
-    VC -->|validated| RP[record_proposal]
+    VC -->|validated| JP[judge_proposal]
+    JP --> RP[record_proposal]
     VC -->|başarısız ve hak var| PF
     VC -->|sınır doldu| GU
     RP --> E4([END])
@@ -59,7 +60,7 @@ flowchart TD
     VS --> E8([END])
 ```
 
-Graf 16 node içerir:
+Graf 17 node içerir:
 
 1. `route_on_state`
 2. `idle`
@@ -71,12 +72,13 @@ Graf 16 node içerir:
 8. `resume_incident`
 9. `propose_fix`
 10. `validate_candidate`
-11. `record_proposal`
-12. `give_up`
-13. `load_approved`
-14. `apply_fix`
-15. `trigger_rerun`
-16. `verify_success`
+11. `judge_proposal`
+12. `record_proposal`
+13. `give_up`
+14. `load_approved`
+15. `apply_fix`
+16. `trigger_rerun`
+17. `verify_success`
 
 `choose_branch`, `after_recording`, `after_resuming`, `after_validation` ve
 `after_loading` conditional edge fonksiyonlarıdır; node değildir.
@@ -126,7 +128,7 @@ Terminal state'ler `in_flight()` sorgusunda hiç dönmez.
 ### `after_validation`
 
 ```text
-validated == true                    → record_proposal
+validated == true                    → judge_proposal → record_proposal
 validated == false ve attempts < max → propose_fix
 validated == false ve attempts >= max→ give_up
 ```
@@ -173,7 +175,8 @@ Bu ayrım restart sonrasında aynı incident için gereksiz yeni run başlatılm
 | `resume_incident` | Store'daki `open` incident | Proposal için yeniden kurulmuş state | Modeli ve kaynak kolonlarını canlı okur; bozuk diagnosis veya scope ihlalinde `refusal` üretir |
 | `propose_fix` | Diagnosis, model, kolonlar | Candidate ve `attempts+1` | İkinci LLM çağrısı; retry'da önceki build hatasını prompt'a ekler |
 | `validate_candidate` | Candidate | `validated`, `build_output` | Scratch kopyada dbt run; exception da başarısız deneme sayılır |
-| `record_proposal` | Validated candidate | `outcome` | Tam before/after içeriğini store'a yazar, state'i `proposed` yapar |
+| `judge_proposal` | Ham kanıtlar ve validated candidate | `judge_review` | Ayrı modelle iki aşamalı danışman incelemesi; hata veya olumsuz görüş veto değildir |
+| `record_proposal` | Validated candidate ve judge review | `outcome` | SQL ve judge sonucunu aynı işlemde kaydeder, state’i `proposed` yapar |
 | `give_up` | `refusal` veya son build hatası | `outcome` | State'i `unfixable` yapar ve conclusion note yazar |
 
 ### Eylem ve doğrulama dalı

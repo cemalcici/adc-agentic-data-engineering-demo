@@ -27,7 +27,7 @@ ailesi ve tek yazma kapsamı olan yerel bir PoC'dir.
 ```mermaid
 flowchart LR
     U[Operatör] -->|Approve veya Reject| UI[Streamlit konsolu]
-    UI -->|Incident oku, yalnızca state yaz| IS[(PostgreSQL incident store)]
+    UI -->|Incident oku, karar ve judge görüşünü yaz| IS[(PostgreSQL incident store)]
 
     A[LangGraph ajanı] -->|Run, task ve log oku; onaydan sonra run başlat| AF[Airflow 3]
     AF -->|dbt run| DBT[dbt projesi]
@@ -154,7 +154,9 @@ Airflow ve ajan imajları aynı `dbt-requirements.txt` pinlerinden kurulur. Böy
 ajanın doğruladığı dbt sürümü ile pipeline'ın çalıştırdığı sürüm ayrışmaz.
 
 Önemli sınır: dbt build, adayın **çalıştığını** kanıtlar; iş açısından doğru
-sonucu ürettiğini kanıtlamaz. Semantik inceleme insan kararında kalır.
+sonucu ürettiğini kanıtlamaz. Farklı bir LLM, `judge_proposal` node’unda önce ham kanıtları, sonra öneriyi
+inceler. Üç gerekçeli kontrolü insan kararına yardımcı olur; veto veya retry
+üretmez. Nihai semantik inceleme insan kararında kalır.
 
 ## 8. Gözlemlenebilirlik tasarımı
 

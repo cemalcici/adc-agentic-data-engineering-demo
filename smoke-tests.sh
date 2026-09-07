@@ -203,7 +203,10 @@ UPDATE ops.incidents SET
     state = 'proposed',
     target_model_path = 'models/staging/stg_customers.sql',
     model_contents_before = :'before',
-    model_contents_after  = :'after'
+    model_contents_after  = :'after',
+    judge_review = NULL,
+    judge_feedback = NULL,
+    judge_feedback_note = NULL
 WHERE state IN ('open', 'proposed');
 
 UPDATE ops.incidents SET state = 'approved' WHERE state = 'proposed';

@@ -28,7 +28,8 @@ RECORD_PROPOSAL = """
     SET state = 'proposed',
         target_model_path = %(target_model_path)s,
         model_contents_before = %(model_contents_before)s,
-        model_contents_after = %(model_contents_after)s
+        model_contents_after = %(model_contents_after)s,
+        judge_review = %(judge_review)s
     WHERE id = %(incident_id)s AND state = 'open'
 """
 
@@ -155,6 +156,7 @@ class IncidentStore:
         target_model_path: str,
         model_contents_before: str,
         model_contents_after: str,
+        judge_review: dict[str, Any],
     ) -> None:
         """Record a validated fix and stop.
 
@@ -169,6 +171,7 @@ class IncidentStore:
                 "target_model_path": target_model_path,
                 "model_contents_before": model_contents_before,
                 "model_contents_after": model_contents_after,
+                "judge_review": psycopg2.extras.Json(judge_review),
             },
         )
 

@@ -1,7 +1,7 @@
-"""Reading the incident record, and writing the one field the operator owns.
+"""Reading the incident record, and writing the decision and judge feedback the operator owns.
 
-The console connects as a role that may select from this table and update a
-single column of it. Nothing in this module enforces that — the grants do, and
+The console connects as a role that may select from this table and update the
+decision and feedback columns. Nothing in this module enforces that — the grants do, and
 an UPDATE naming any other column is refused by the server rather than by a
 check here.
 
@@ -37,13 +37,15 @@ HISTORY = """
 # this is what lets the console explain rather than raise.
 RECORD_DECISION = """
     UPDATE ops.incidents
-    SET state = %(decision)s
+    SET state = %(decision)s,
+        judge_feedback = %(judge_feedback)s,
+        judge_feedback_note = %(judge_feedback_note)s
     WHERE id = %(incident_id)s AND state = %(expected_state)s
 """
 
 
 class IncidentStore:
-    """Reads the record; writes one column of it."""
+    """Reads the record; writes the decision and human judge feedback."""
 
     def __init__(self, host: str, database: str, user: str, password: str) -> None:
         self._connect_args = {
@@ -78,7 +80,8 @@ class IncidentStore:
             connection.close()
 
     def record_decision(
-        self, incident_id: int, decision: str, expected_state: str
+        self, incident_id: int, decision: str, expected_state: str,
+        judge_feedback: str | None = None, judge_feedback_note: str | None = None,
     ) -> bool:
         """Record the operator's decision, if the incident is still where it was.
 
@@ -95,6 +98,8 @@ class IncidentStore:
                         "incident_id": incident_id,
                         "decision": decision,
                         "expected_state": expected_state,
+                        "judge_feedback": judge_feedback,
+                        "judge_feedback_note": judge_feedback_note,
                     },
                 )
                 moved = cursor.rowcount == 1

@@ -518,3 +518,22 @@ Stack hazır olduğunda:
 
 Smoke test stack'i senaryonun ortasında bırakabilir. Manuel denemeden önce
 **Sistemi başlangıç durumuna döndürün** bölümündeki adımları yeniden uygulayın.
+
+## Kolon düzeltmesinde LLM-as-Judge
+
+`.env` içinde `OPENAI_MODEL` değerinden farklı, endpoint üzerinde erişilebilir
+bir `JUDGE_MODEL` seçin. Ayrı sağlayıcı için `JUDGE_BASE_URL` ve `JUDGE_API_KEY`
+kullanılabilir; boşlarsa üreticinin bağlantısı kullanılır.
+
+Ana kolon değişikliği senaryosunda `validate_candidate` sonrasında
+`judge_proposal` görünür. Judge önce hata log’u, mevcut SQL ve kaynak kolonlarını
+inceler; sonra üreticinin teşhisini ve doğrulanmış SQL önerisini değerlendirir.
+İki çağrı Phoenix trace içinde görülebilir.
+
+Onay ekranında `cust_id as customer_id` düzeltmesini ve judge'ın üç kontrolünü
+inceleyin. Judge görüşüne katılımınızı seçin, ardından SQL için Approve veya
+Reject kullanın. Bu iki karar farklıdır. Judge görüşü olumsuz olsa da insan
+onaylayabilir. Değerlendirme alınamazsa ekranda açıkça belirtilir ve katılım
+seçimi istenmez. Onaydan sonra mevcut apply ve pipeline verification akışı sürer.
+
+Ek arıza veya hazırlanmış judge senaryosu yoktur; aynı kolon düzeltmesi gösterilir.

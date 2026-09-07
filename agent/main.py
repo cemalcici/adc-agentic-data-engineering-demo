@@ -14,6 +14,7 @@ from __future__ import annotations
 import sys
 import time
 
+from langchain_openai import ChatOpenAI
 from opentelemetry import trace
 from validation import Validator
 
@@ -94,7 +95,11 @@ def main() -> int:
             "password": settings.postgres_password,
         },
     )
-    graph = build_graph(settings, orchestrator, store, validator, llm)
+    judge_llm = ChatOpenAI(
+        base_url=settings.judge_base_url, api_key=settings.judge_api_key,
+        model=settings.judge_model, temperature=0, timeout=30, max_retries=0,
+    )
+    graph = build_graph(settings, orchestrator, store, validator, llm, judge_llm)
 
     print(f"watching {settings.dag_id} every {settings.poll_interval_seconds}s")
     tracer = trace.get_tracer("agent")

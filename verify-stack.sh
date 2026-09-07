@@ -185,15 +185,17 @@ fi
 # See adr/0016-enforce-the-incident-lifecycle-in-the-database.md
 GATE_PARTS="$(psql_query warehouse_db "
     SELECT count(*) FROM (
-        SELECT 1 FROM pg_trigger WHERE tgrelid = 'ops.incidents'::regclass AND NOT tgisinternal
+        SELECT 1 FROM pg_trigger WHERE tgrelid = 'ops.incidents'::regclass
+          AND NOT tgisinternal AND tgenabled <> 'D'
+          AND tgname IN ('incidents_lifecycle', 'incidents_start_open', 'incidents_judge_feedback')
         UNION ALL
         SELECT 1 FROM pg_indexes WHERE schemaname='ops' AND indexname='incidents_only_one_in_flight'
     ) present")"
-if [[ "${GATE_PARTS}" == "3" ]]; then
+if [[ "${GATE_PARTS}" == "4" ]]; then
     pass "incident lifecycle is enforced by the database"
 else
     fail "incident lifecycle is enforced by the database" \
-        "expected 2 triggers and the single-in-flight index, found ${GATE_PARTS:-0} of 3"
+        "expected 3 triggers and the single-in-flight index, found ${GATE_PARTS:-0} of 4"
 fi
 
 # --- Orchestrator ----------------------------------------------------------
@@ -305,7 +307,7 @@ else
         "no response — see: docker compose logs streamlit"
 fi
 
-# The console's whole claim is that it writes one thing. Asserted here rather
+# The console writes only the decision and human judge feedback. Asserted here rather
 # than trusted, because it is a claim made out loud during the demo and because
 # a grant is exactly the kind of thing a later change can widen without anyone
 # noticing.
@@ -315,10 +317,10 @@ CONSOLE_WRITES="$(psql_query warehouse_db "
     FROM information_schema.column_privileges
     WHERE table_schema = 'ops' AND grantee = '${DASHBOARD_DB_USER}'
       AND privilege_type <> 'SELECT'")"
-if [[ "${CONSOLE_WRITES}" == "UPDATE:state" ]]; then
-    pass "console may write the decision and nothing else"
+if [[ "${CONSOLE_WRITES}" == "UPDATE:judge_feedback,UPDATE:judge_feedback_note,UPDATE:state" ]]; then
+    pass "console may write the decision and judge feedback only"
 else
-    fail "console may write the decision and nothing else" \
+    fail "console may write the decision and judge feedback only" \
         "its write grants are: ${CONSOLE_WRITES}"
 fi
 

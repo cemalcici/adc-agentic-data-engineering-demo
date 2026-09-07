@@ -59,6 +59,9 @@ class Settings:
     llm_base_url: str
     llm_api_key: str
     llm_model: str
+    judge_model: str
+    judge_base_url: str
+    judge_api_key: str
 
     poll_interval_seconds: int
     phoenix_endpoint: str
@@ -67,6 +70,9 @@ class Settings:
 
 def load() -> Settings:
     """Read settings from the environment, failing loudly on anything missing."""
+    judge_model = _require("JUDGE_MODEL").strip()
+    if not judge_model or judge_model.casefold() == _require("OPENAI_MODEL").strip().casefold():
+        raise RuntimeError("JUDGE_MODEL must name a different model from OPENAI_MODEL")
     return Settings(
         postgres_host=_require("POSTGRES_HOST"),
         postgres_user=_require("POSTGRES_USER"),
@@ -92,6 +98,9 @@ def load() -> Settings:
         llm_base_url=_require("OPENAI_BASE_URL"),
         llm_api_key=_require("OPENAI_API_KEY"),
         llm_model=_require("OPENAI_MODEL"),
+        judge_model=judge_model,
+        judge_base_url=os.environ.get("JUDGE_BASE_URL") or _require("OPENAI_BASE_URL"),
+        judge_api_key=os.environ.get("JUDGE_API_KEY") or _require("OPENAI_API_KEY"),
         poll_interval_seconds=int(os.environ.get("AGENT_POLL_INTERVAL_SECONDS", "20")),
         phoenix_endpoint=os.environ.get("PHOENIX_COLLECTOR_ENDPOINT", ""),
         # Where an operator reaches Phoenix, which is not where the agent
