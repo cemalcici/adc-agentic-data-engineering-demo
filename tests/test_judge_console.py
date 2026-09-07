@@ -57,3 +57,36 @@ _show_notice()
         assert len(app.selectbox) == 0
     assert app.session_state["saved"]["decision"] == "approved"
     assert not app.exception
+
+
+def test_unfixable_history_explains_why_without_offering_approval():
+    source = (ROOT / "streamlit_app/app.py").read_text().rsplit("\nmain()", 1)[0]
+    source = source.replace("from __future__ import annotations", "")
+    row = dict(id=1, state="unfixable", opened_at=None, failing_task_id="dbt_run",
+               conclusion_note="dbt executable not found: /demo-fault/dbt-unavailable")
+    bootstrap = f"import sys\nsys.path.insert(0, {str(ROOT / 'streamlit_app')!r})\n"
+    app = AppTest.from_string(bootstrap + source + f"\nhistory_panel([{row!r}])", default_timeout=15).run()
+    assert not app.exception
+    content = "\n".join(str(element.value) for element in app.markdown)
+    assert "unfixable" in content
+    assert row["conclusion_note"] in content
+    assert not app.button
+
+
+@pytest.mark.parametrize("same_run", [True, False])
+def test_recorded_failure_is_not_reported_as_unrecorded(same_run):
+    source = (ROOT / "streamlit_app/app.py").read_text().rsplit("\nmain()", 1)[0]
+    source = source.replace("from __future__ import annotations", "")
+    row = dict(id=1, state="unfixable", opened_at=None, failing_task_id="dbt_run",
+               failing_run_id="failed-1", conclusion_note="3 candidates; validator unavailable")
+    bootstrap = f"import sys\nsys.path.insert(0, {str(ROOT / 'streamlit_app')!r})\n"
+    harness = f'''
+from types import SimpleNamespace
+store = SimpleNamespace(in_flight=lambda: None, history=lambda: [{row!r}])
+pipeline.health = lambda _: ("failing", {{"dag_run_id": {('failed-1' if same_run else 'failed-2')!r}}}, "last run failed")
+render(SimpleNamespace(), store, None, refreshing=False)
+'''
+    app = AppTest.from_string(bootstrap + source + harness, default_timeout=15).run()
+    assert not app.exception
+    content = "\n".join(str(element.value) for element in app.markdown)
+    assert ("Nothing has been recorded for this failure yet" in content) is not same_run

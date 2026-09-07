@@ -308,6 +308,12 @@ def history_panel(rows: list[dict[str, Any]]) -> None:
             unsafe_allow_html=True,
         )
 
+        if row.get("conclusion_note"):
+            with st.expander(f"#{row['id']} — Neden durdu?", expanded=True):
+                st.write(row["conclusion_note"])
+                if state == "unfixable":
+                    st.caption("Bu incident için doğrulanmış bir öneri sunulmadı; dbt dosyası değiştirilmedi.")
+
         if row.get("judge_review"):
             with st.expander(f"#{row['id']} — Judge değerlendirmesi ve insan görüşü"):
                 st.code(row.get("model_contents_after") or "", language="sql")
@@ -338,9 +344,12 @@ def render(settings: config.Settings, store: IncidentStore, orchestrator: pipeli
     state, run, detail = pipeline.health(orchestrator)
     status_header(state, detail, run)
 
+    history = store.history()
     if incident is None:
         if state == "failing":
-            nothing_recorded_yet()
+            recorded = any(row.get("failing_run_id") == (run or {}).get("dag_run_id") for row in history)
+            if not recorded:
+                nothing_recorded_yet()
     elif incident["state"] == "open":
         diagnosis_panel(incident)
     elif incident["state"] == "proposed":
@@ -351,7 +360,7 @@ def render(settings: config.Settings, store: IncidentStore, orchestrator: pipeli
         applying_panel(incident)
 
     st.divider()
-    history_panel(store.history())
+    history_panel(history)
 
     st.markdown(
         '<div class="muted" style="font-size:0.75rem;margin-top:18px">'

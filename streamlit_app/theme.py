@@ -45,7 +45,7 @@ STATE_LABELS = {
     "approved": "applying",
     "resolved": "resolved",
     "rejected": "you rejected this",
-    "unfixable": "the agent could not fix it",
+    "unfixable": "unfixable",
     "verification_failed": "applied, did not recover",
 }
 

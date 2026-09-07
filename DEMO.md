@@ -7,7 +7,7 @@ Kurulumdan başlayarak üç davranışı çalıştırır:
 2. Kalıcı arıza yeni bir incident olarak tekrar ele alınır; insan onaylar;
    ajan düzeltmeyi uygulayıp kendi başlattığı koşuyla doğrular.
 3. İsteğe bağlı olarak doğrulayıcı devre dışı bırakılır; ajan sınırlı sayıda
-   deneyip `unfixable` sonucuyla durur.
+   deneyip mevcut incident'ı `unfixable` sonucuyla kapatır.
 
 Bu PoC'nin temel iddiası şudur:
 
@@ -284,11 +284,17 @@ sözleşmesini koruyan küçük bir alias'tır:
 cust_id as customer_id
 ```
 
-## Senaryo 2: Doğrulayıcı yoksa ajan durur
+## Senaryo 2: Doğrulayıcı yoksa incident `unfixable` ile kapanır
 
 Bu isteğe bağlı senaryo kontrollü fault injection kullanır. Amaç modeli kötü
 cevap vermeye zorlamak değil, aday düzeltme doğrulanamadığında grafın sınırlı
-retry sonrasında durduğunu göstermektir.
+retry sonrasında mevcut incident'ı kapattığını göstermektir.
+
+Bu sınır **incident başınadır**; ajan servisi kapanmaz. Kalıcı arıza sürerken
+in-flight incident kalmadığında sonraki polling turu yeniden teşhis başlatabilir.
+Bu, aynı başarısız run için de takvimin başlattığı yeni run için de mümkündür.
+Dolayısıyla History’de bir `unfixable` kaydının üzerinde yeni bir `DIAGNOSED`
+kaydı görmek retry sınırının aşıldığı anlamına gelmez.
 
 Senaryonun beklenen sonucu:
 
@@ -340,8 +346,9 @@ executable bulunamadığı için başarısız olur. İlk deneme ve iki retry son
 
 Streamlit'te beklenen durum:
 
-- History içinde `unfixable` incident
-- Onaylanabilir proposal veya diff bulunmaması
+- History içinde tam olarak `unfixable` etiketi
+- **Neden durdu?** alanında `3 candidate(s)` ve `/demo-fault/dbt-unavailable` hatası
+- Kapanan incident için onaylanabilir proposal, diff veya judge değerlendirmesi bulunmaması
 - Pipeline'ın kırmızı kalması
 
 Agent log'unu kontrol edin:
@@ -361,7 +368,17 @@ propose_fix → validate_candidate
 
 Buradaki anlam “ajan düzeltmenin yanlış olduğunu kanıtladı” değildir. Ajan
 düzeltmenin doğru olduğunu kanıtlayamadığı için operatöre uygulanabilir bir
-öneri sunmadan durmuştur.
+öneri sunmadan bu incident’ı kapatmıştır. Judge yalnızca doğrulanmış adaydan
+sonra çalıştığı için bu dalda çağrılmaz.
+
+Sonucu sabit tutup incelemek için ilk `unfixable` kaydından sonra ajanı
+durdurabilirsiniz (Airflow çalışmaya devam eder):
+
+```bash
+docker compose stop agent
+```
+
+Bu operatörün demo kontrolüdür; grafın kendiliğinden servisi durdurması değildir.
 
 ### 5. Fault injection'ı kaldırın
 
