@@ -23,7 +23,7 @@ Bu PoC'nin temel iddiası şudur:
 - Aşağıdaki yerel portların kullanılabilir olması:
   - `5432`: PostgreSQL
   - `6006`: Phoenix
-  - `8080`: Airflow
+  - `8081`: Airflow
   - `8501`: Streamlit
 
 İlk kurulum Docker imajlarını oluşturduğu için birkaç dakika sürebilir.
@@ -57,7 +57,7 @@ Stack şu bileşenleri başlatır:
 | Bileşen | Görevi | Adres |
 | --- | --- | --- |
 | PostgreSQL | Kaynak, warehouse ve incident store | `localhost:5432` |
-| Airflow | ELT pipeline ve gerçek koşu durumu | <http://localhost:8080> |
+| Airflow | ELT pipeline ve gerçek koşu durumu | <http://localhost:8081> |
 | Agent | Hata tespiti, teşhis, öneri, uygulama ve doğrulama | Container servisi |
 | Phoenix | Ajan trace'leri | <http://localhost:6006> |
 | Streamlit | Operatör konsolu | <http://localhost:8501> |
@@ -102,7 +102,7 @@ Konsolun yetkisi bilinçli olarak dardır:
 
 ### Airflow
 
-<http://localhost:8080>
+<http://localhost:8081>
 
 `.env` dosyasında tanımladığınız admin kullanıcısıyla giriş yapın.
 `customer_elt` DAG'ı iki task içerir:

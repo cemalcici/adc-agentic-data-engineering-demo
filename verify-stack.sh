@@ -332,7 +332,8 @@ fi
 # succeed, and this check would both fail and leave a pipeline run behind — an
 # unwanted side effect from a readiness check, accepted because a check that
 # only reads configuration proves less than one that tries the thing.
-VIEWER_TOKEN="$(curl -fsS --max-time 10 -X POST "${AIRFLOW_URL}/auth/token" \
+AIRFLOW_HOST_URL="http://localhost:${AIRFLOW_PORT:-8080}"
+VIEWER_TOKEN="$(curl -fsS --max-time 10 -X POST "${AIRFLOW_HOST_URL}/auth/token" \
     -H 'Content-Type: application/json' \
     -d "{\"username\":\"${AIRFLOW_VIEWER_USERNAME}\",\"password\":\"${AIRFLOW_VIEWER_PASSWORD}\"}" \
     2>/dev/null | sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')"
@@ -340,7 +341,7 @@ if [[ -z "${VIEWER_TOKEN}" ]]; then
     fail "console's orchestrator user can read runs" "it was not issued a token"
 else
     TRIGGER_CODE="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-        -X POST "${AIRFLOW_URL}/api/v2/dags/customer_elt/dagRuns" \
+        -X POST "${AIRFLOW_HOST_URL}/api/v2/dags/customer_elt/dagRuns" \
         -H "Authorization: Bearer ${VIEWER_TOKEN}" \
         -H 'Content-Type: application/json' -d '{"logical_date": null}')"
     if [[ "${TRIGGER_CODE}" == "403" ]]; then
