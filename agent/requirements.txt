@@ -3,4 +3,4 @@ langchain-openai==1.5.1
 psycopg2-binary==2.9.12
 requests==2.34.2
 openinference-instrumentation-langchain==0.1.70
-arize-phoenix-otel==0.17.1
+arize-phoenix-otel==0.17.2

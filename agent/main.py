@@ -54,7 +54,7 @@ def start_tracing(endpoint: str) -> None:
         LangChainInstrumentor().instrument(tracer_provider=provider)
         print(f"tracing to {endpoint}")
     except Exception as error:  # noqa: BLE001 - tracing must never be fatal
-        print(f"tracing unavailable ({type(error).__name__}); continuing without it")
+        print(f"tracing unavailable ({type(error).__name__}: {error}); continuing without it")
 
 
 def main() -> int:
